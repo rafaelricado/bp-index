@@ -1,0 +1,183 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  DIGITALIZADOR
+  CONSULTA
+}
+
+enum DocumentType {
+  PRONTUARIO
+  EXAME
+  RECEITA
+  LAUDO
+  TERMO
+  OUTROS
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      UserRole @default(CONSULTA)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relacoes
+  uploadedDocuments Document[]
+  auditLogs         AuditLog[]
+  checklists        DigitizationChecklist[]
+
+  @@map("users")
+}
+
+model Patient {
+  id              String    @id @default(uuid())
+  legacyRecordNum String    @unique // Numero do prontuario legado
+  name            String
+  cpf             String?   @unique
+  birthDate       DateTime?
+  gender          String?
+  phone           String?
+  email           String?
+  address         String?
+  city            String?
+  state           String?
+  zipCode         String?
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relacoes
+  medicalRecords MedicalRecord[]
+
+  @@index([name])
+  @@index([cpf])
+  @@index([legacyRecordNum])
+  @@map("patients")
+}
+
+model MedicalRecord {
+  id                  String    @id @default(uuid())
+  patientId           String
+  description         String?
+  startDate           DateTime? // Data do primeiro registro no prontuario
+  lastActivityDate    DateTime? // Data do ultimo registro (para calculo dos 20 anos)
+  retentionExpiryDate DateTime? // Data de expiracao da guarda (20 anos apos lastActivityDate)
+  hasHistoricalValue  Boolean   @default(false) // Documento de valor historico
+  status              String    @default("ATIVO") // ATIVO, ARQUIVADO, ELIMINADO
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  // Relacoes
+  patient   Patient                 @relation(fields: [patientId], references: [id])
+  documents Document[]
+  checklist DigitizationChecklist[]
+
+  @@index([patientId])
+  @@map("medical_records")
+}
+
+model Document {
+  id              String       @id @default(uuid())
+  medicalRecordId String
+  uploadedById    String
+  fileName        String
+  originalName    String
+  mimeType        String
+  fileSize        Int
+  filePath        String
+  hashSha256      String // Hash para verificacao de integridade
+  documentType    DocumentType @default(OUTROS)
+  documentDate    DateTime? // Data do documento original
+  description     String?
+  ocrText         String? // Texto extraido por OCR
+  ocrProcessed    Boolean      @default(false)
+  resolution      Int? // DPI do documento
+  pageCount       Int?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  // Metadados obrigatorios - Decreto 10.278/2020 Anexo II
+  digitizationDate       DateTime  @default(now())
+  digitizationResponsible String?
+  originalDocIdentifier  String? // Identificacao do documento original
+
+  // Relacoes
+  medicalRecord MedicalRecord @relation(fields: [medicalRecordId], references: [id])
+  uploadedBy    User          @relation(fields: [uploadedById], references: [id])
+
+  @@index([medicalRecordId])
+  @@index([hashSha256])
+  @@map("documents")
+}
+
+model DigitizationChecklist {
+  id              String @id @default(uuid())
+  medicalRecordId String
+  completedById   String
+
+  // Requisitos Tecnicos - Decreto 10.278/2020
+  hasMinResolution    Boolean @default(false) // Resolucao minima 300 dpi
+  hasCorrectFormat    Boolean @default(false) // Formato PDF/A ou PNG
+  isFaithfulCopy      Boolean @default(false) // Reproducao fiel do original
+  isLegible           Boolean @default(false) // Documento legivel
+
+  // Requisitos de Seguranca
+  hasIntegrityHash    Boolean @default(false) // Hash SHA-256 gerado
+  hasAccessControl    Boolean @default(false) // Controle de acesso configurado
+  hasBackup           Boolean @default(false) // Backup realizado
+  hasAuditLog         Boolean @default(false) // Log de auditoria registrado
+
+  // Metadados Obrigatorios - Anexo II
+  hasResponsibleName  Boolean @default(false) // Nome do responsavel
+  hasDigitizationDate Boolean @default(false) // Data da digitalizacao
+  hasOriginalId       Boolean @default(false) // Identificacao do original
+  hasFileHash         Boolean @default(false) // Hash do arquivo
+
+  // Requisitos Lei 13.787/2018
+  hasRetentionPeriod    Boolean @default(false) // Prazo de guarda definido
+  hasHistoricalReview   Boolean @default(false) // Avaliacao de valor historico
+  hasPatientAccessRight Boolean @default(false) // Garantia de acesso ao paciente
+
+  notes       String?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relacoes
+  medicalRecord MedicalRecord @relation(fields: [medicalRecordId], references: [id])
+  completedBy   User          @relation(fields: [completedById], references: [id])
+
+  @@unique([medicalRecordId])
+  @@map("digitization_checklists")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  action     String // CREATE, READ, UPDATE, DELETE, LOGIN, LOGOUT, DOWNLOAD
+  entityType String // User, Patient, MedicalRecord, Document
+  entityId   String?
+  details    String? // JSON com detalhes adicionais
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  // Relacoes
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
